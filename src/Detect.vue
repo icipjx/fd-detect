@@ -168,7 +168,19 @@
             <h2 class="title">{{ detectText.resultTitle }}</h2>
             <p class="sub">{{ detectText.resultSub }}</p>
           </div>
-          <span class="badge">{{ useMock ? detectText.modeMock : detectText.modeApi }}</span>
+          <div class="taskTabs">
+            <button
+              v-for="tab in taskTabs"
+              :key="tab.key"
+              class="taskTab"
+              :class="{ active: activeTask === tab.key }"
+              type="button"
+              @click="switchTask(tab.key)"
+            >
+              <span class="dot" :class="taskDotClass(tab.key)"></span>
+              <span>{{ tab.label }}</span>
+            </button>
+          </div>
         </div>
         <div class="bd">
           <div class="kpi">
@@ -186,7 +198,7 @@
               <b class="kpiValue kpiPercent">{{ kpiConfidence }}</b>
             </div>
 
-            <div class="box">
+            <div class="box" v-if="activeTask === 'tamper'">
               <small>{{ detectText.kpiArea }}</small>
               <b class="kpiValue kpiPercent">{{ kpiArea }}</b>
             </div>
@@ -195,7 +207,7 @@
 
           <div style="margin-top:14px">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-              <b style="font-size:13px">{{ detectText.reasonsTitle }}</b>
+              <b style="font-size:13px">{{ reasonsTitleText }}</b>
               <span class="badge">{{ reasons.length }} {{ detectText.reasonCountLabel }}</span>
             </div>
             <div class="list">
@@ -271,7 +283,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import LanguageSwitcher from './components/LanguageSwitcher.vue'
 import { useI18n } from './i18n'
 
@@ -289,6 +301,11 @@ const fileInputEl = ref(null)
 
 const currentFile = ref(null)
 const currentResult = ref(null)
+const activeTask = ref('tamper')
+const taskResults = reactive({
+  tamper: makeEmptyTask({ includeArea: true }),
+  ai: makeEmptyTask()
+})
 
 const imageUrl = ref('')
 const heatmapUrl = ref('')
@@ -299,7 +316,6 @@ const statusKey = ref('waiting') // waiting | uploaded | sample | detecting | de
 const progress = ref(0)
 const timeCostMs = ref(null)
 
-const reasons = ref([])
 const historyAll = ref([]) // 模拟“后端历史库”（接后端后用接口替代）
 const historyView = ref([]) // 页面展示的分页结果
 const historyPage = ref(1)
@@ -331,6 +347,34 @@ const timeCostText = computed(() => {
   if (typeof timeCostMs.value === 'number') return d.timeCostFmt.replace('{ms}', Math.round(timeCostMs.value))
   return d.timeCostIdle
 })
+
+const taskTabs = computed(() => ([
+  { key: 'ai', label: detectText.value.taskTabs?.ai || 'AI 伪造' },
+  { key: 'tamper', label: detectText.value.taskTabs?.tamper || '局部篡改' }
+]))
+
+const currentTaskData = computed(() => taskResults[activeTask.value] || makeEmptyTask({ includeArea: activeTask.value === 'tamper' }))
+const reasons = computed(() => currentTaskData.value.reasons || [])
+const reasonsTitleText = computed(() => {
+  if (activeTask.value === 'ai') return detectText.value.aiReasonsTitle || detectText.value.reasonsTitle
+  return detectText.value.reasonsTitle
+})
+
+function makeEmptyTask({ includeArea = false } = {}){
+  return { risk_level: '', confidence: null, tamper_area_ratio: includeArea ? null : null, heatmap: '', reasons: [] }
+}
+
+function switchTask(key){
+  activeTask.value = key
+}
+
+function taskDotClass(taskKey){
+  const lv = String(taskResults[taskKey]?.risk_level || '').toUpperCase()
+  if (lv === 'LOW' || lv === 'PASS') return 'good'
+  if (lv === 'MID' || lv === 'WARN') return 'warn'
+  if (lv === 'HIGH' || lv === 'FAIL') return 'bad'
+  return 'idle'
+}
 
 /* =====================
  * ✅ 检测历史：卡片展示 + 滚动分页加载（本地模拟）
@@ -399,11 +443,11 @@ function addHistoryRecord(rec){
 
 
 const riskValueClass = computed(() => {
-const lv = currentResult.value?.risk_level
-if (lv === 'LOW') return 'kpiGood'
-if (lv === 'MID') return 'kpiWarn'
-if (lv === 'HIGH') return 'kpiBad'
-return ''
+  const lv = currentTaskData.value?.risk_level
+  if (lv === 'LOW') return 'kpiGood'
+  if (lv === 'MID') return 'kpiWarn'
+  if (lv === 'HIGH') return 'kpiBad'
+  return ''
 })
 
 // =====================
@@ -528,6 +572,26 @@ async function dataUrlToFile(dataUrl, filename) {
   return new File([blob], filename, { type: blob.type || 'image/jpeg' })
 }
 
+function buildAiReasons(riskLevel){
+  const aiMock = detectText.value.mockAiReasons || {}
+  const fallback = [
+    { title: '纹理统计异常', detail: '高级纹理分布不符自然机理样本。' },
+    { title: '语义一致性异常', detail: '文字与背景逻辑不符，存在合成痕迹。' },
+    { title: '扩散模型残留特征', detail: '检测到典型生成模型噪声模式。' }
+  ]
+  const items = [
+    aiMock.pattern || fallback[0],
+    aiMock.semantic || fallback[1],
+    aiMock.model || fallback[2]
+  ]
+  return items.map((item, idx) => ({
+    title: item.title || fallback[idx]?.title || detectText.value.reasonFallback,
+    detail: item.detail || fallback[idx]?.detail || '',
+    severity: normalizeSeverity(item.severity || (riskLevel === 'HIGH' ? 'FAIL' : 'WARN')),
+    tag: item.tag || ''
+  }))
+}
+
 function buildSampleResult({ risk_level, confidence, tamper_area_ratio, seed }) {
   const heatmap = makeHeatmapBase64Seeded(seed)
   const mReasons = detectText.value.mockReasons
@@ -543,13 +607,19 @@ function buildSampleResult({ risk_level, confidence, tamper_area_ratio, seed }) 
     rs.push({ title: mReasons.date.title, detail: mReasons.date.detail, severity: 'FAIL' })
   }
 
-  return {
+  const tamper = {
     risk_level,
     confidence,
     tamper_area_ratio,
     heatmap_base64: heatmap,
     reasons: rs
   }
+
+  const aiRisk = risk_level === 'HIGH' ? 'HIGH' : (risk_level === 'MID' ? 'MID' : 'LOW')
+  const aiConfidence = typeof confidence === 'number' ? Math.max(confidence, 0.82) : (aiRisk === 'HIGH' ? 0.91 : 0.85)
+  const ai = { risk_level: aiRisk, confidence: aiConfidence, reasons: buildAiReasons(aiRisk) }
+
+  return { tamper, ai }
 }
 
 async function initSamples() {
@@ -592,11 +662,12 @@ async function applySample(s, { skipHistory = false } = {}) {
   // 不弹清空 toast，直接重置关键状态
   currentFile.value = null
   currentResult.value = null
-  reasons.value = []
+  resetTaskResults()
   heatmapUrl.value = ''
   showOverlay.value = false
   progress.value = 100
   timeCostMs.value = null
+  activeTask.value = 'tamper'
 
   // 用 dataUrl 作为预览图（不会出现裂图）
   imageUrl.value = s.image
@@ -617,7 +688,8 @@ async function applySample(s, { skipHistory = false } = {}) {
     tamper_area_ratio: s.area,
     seed: s.seed
   })
-  applyResult(result)
+  const normalized = normalizeDetectionResult(result)
+  applyResult(normalized)
 
     // ✅ 点击样例同时写入历史，便于你立刻看到“卡片效果”
     if (!skipHistory) {
@@ -626,14 +698,14 @@ async function applySample(s, { skipHistory = false } = {}) {
       sampleId: s.id,
       ts: Date.now(),
       filename: s.title,
-      confidence: result.confidence ?? s.confidence ?? 0,
-      risk_level: result.risk_level ?? s.risk_level ?? detectText.value.defaults.dash,
-      conclusion: riskToConclusion(result.risk_level ?? s.risk_level ?? detectText.value.defaults.dash),
-        tamper_area_ratio: result.tamper_area_ratio ?? s.area ?? null,
+      confidence: normalized.tamper?.confidence ?? normalized.ai?.confidence ?? s.confidence ?? 0,
+      risk_level: normalized.tamper?.risk_level ?? normalized.ai?.risk_level ?? s.risk_level ?? detectText.value.defaults.dash,
+      conclusion: riskToConclusion(normalized.tamper?.risk_level ?? normalized.ai?.risk_level ?? s.risk_level ?? detectText.value.defaults.dash),
+        tamper_area_ratio: normalized.tamper?.tamper_area_ratio ?? s.area ?? null,
         thumb: s.thumb,
         image: s.image,
         heatmap: heatmapUrl.value,
-        raw: result
+        raw: normalized
       })
     }
 
@@ -646,30 +718,31 @@ let toastTimer = null
 
 const apiChip = computed(() => useMock.value ? detectText.value.apiChipMock : t('detect.apiChipReal', { api: API_URL }))
 
-const kpiRisk = computed(() => currentResult.value?.risk_level ?? detectText.value.defaults.dash)
+const kpiRisk = computed(() => currentTaskData.value?.risk_level || detectText.value.defaults.dash)
 const kpiConfidence = computed(() => {
-  const c = currentResult.value?.confidence
+  const c = currentTaskData.value?.confidence
   return typeof c === 'number' ? `${Math.round(c*100)}%` : detectText.value.defaults.dash
 })
 const kpiArea = computed(() => {
-  const a = currentResult.value?.tamper_area_ratio
-  return typeof a === 'number' ? `${(a*100).toFixed(1)}%` : detectText.value.defaults.dash
+  const a = currentTaskData.value?.tamper_area_ratio
+  if (typeof a !== 'number') return detectText.value.defaults.dash
+  return `${(a*100).toFixed(1)}%`
 })
 const kpiAreaHint = computed(() => {
-  const a = currentResult.value?.tamper_area_ratio
+  const a = currentTaskData.value?.tamper_area_ratio
   if (typeof a !== 'number') return detectText.value.defaults.needHeatmap
   return a > 0.08 ? detectText.value.defaults.areaHigh : detectText.value.defaults.areaLow
 })
 
 const riskBadgeClass = computed(() => {
-  const lv = currentResult.value?.risk_level
+  const lv = currentTaskData.value?.risk_level
   if (lv === 'LOW') return 'good'
   if (lv === 'MID') return 'warn'
   if (lv === 'HIGH') return 'bad'
   return ''
 })
 const riskBadgeText = computed(() => {
-  const lv = currentResult.value?.risk_level
+  const lv = currentTaskData.value?.risk_level
   return lv ? detectText.value.defaults.riskPrefix.replace('{level}', lv) : detectText.value.defaults.riskEmpty
 })
 
@@ -736,7 +809,8 @@ function onFileSelected(file){
 
   currentFile.value = file
   currentResult.value = null
-  reasons.value = []
+  resetTaskResults()
+  activeTask.value = 'tamper'
   heatmapUrl.value = ''
   showOverlay.value = false
 
@@ -750,13 +824,14 @@ function onFileSelected(file){
 function clearAll(){
   currentFile.value = null
   currentResult.value = null
-  reasons.value = []
+  resetTaskResults()
   imgMeta.value = detectText.value.defaults.imgMeta
   statusKey.value = 'waiting'
   progress.value = 0
   timeCostMs.value = null
   heatmapUrl.value = ''
   showOverlay.value = false
+  activeTask.value = 'tamper'
   revokeObjectUrls()
   imageUrl.value = ''
   if (fileInputEl.value) fileInputEl.value.value = ''
@@ -785,6 +860,47 @@ function normalizeSeverity(s){
   if (['WARN','MID'].includes(s)) return 'WARN'
   if (['FAIL','HIGH','BAD'].includes(s)) return 'FAIL'
   return 'WARN'
+}
+
+function normalizeReasons(list){
+  return (list || []).map(r => ({
+    title: r.title || r.reason || detectText.value.reasonFallback,
+    detail: r.detail || r.desc || r.message || '',
+    severity: normalizeSeverity(r.severity || r.level || ''),
+    tag: r.tag || r.field || '',
+    value: r.value || ''
+  }))
+}
+
+function normalizeTaskResult(src, { includeArea = false } = {}){
+  const area = includeArea
+    ? (typeof src?.tamper_area_ratio === 'number'
+      ? src.tamper_area_ratio
+      : (typeof src?.area_ratio === 'number' ? src.area_ratio : null))
+    : null
+  return {
+    risk_level: src?.risk_level || src?.risk || '',
+    confidence: typeof src?.confidence === 'number' ? src.confidence : null,
+    tamper_area_ratio: area,
+    heatmap: src?.heatmap_base64 || src?.heatmap_url || src?.heatmap || '',
+    reasons: normalizeReasons(src?.reasons || [])
+  }
+}
+
+function normalizeDetectionResult(result){
+  const aiSrc = result?.ai || result?.ai_result || result?.aiForgery || result?.ai_forgery || result?.ai_detection || result?.aiDetect
+  const tamperSrc = result?.tamper || result?.tamper_result || result
+  const rawOriginal = result?.raw ?? result
+  return {
+    tamper: normalizeTaskResult(tamperSrc || {}, { includeArea: true }),
+    ai: normalizeTaskResult(aiSrc || {}, { includeArea: false }),
+    raw: rawOriginal
+  }
+}
+
+function resetTaskResults(){
+  taskResults.tamper = makeEmptyTask({ includeArea: true })
+  taskResults.ai = makeEmptyTask()
 }
 
 function rand(a,b){ return a + Math.random()*(b-a) }
@@ -824,7 +940,13 @@ function buildMockResult(){
   rs.push({ title: mReasons.recompress.title, detail: mReasons.recompress.detail, severity: risk==='HIGH'?'WARN':'PASS' })
   if(risk === 'HIGH') rs.push({ title: mReasons.date.title, detail: mReasons.date.detail, severity:'FAIL' })
 
-  return { risk_level:risk, confidence:conf, tamper_area_ratio:area, heatmap_base64:heatmap, reasons:rs }
+  const tamper = { risk_level:risk, confidence:conf, tamper_area_ratio:area, heatmap_base64:heatmap, reasons:rs }
+
+  const aiRisk = ['LOW','MID','HIGH'][Math.floor(Math.random()*3)]
+  const aiConf = aiRisk==='LOW' ? rand(0.78,0.9) : (aiRisk==='MID' ? rand(0.8,0.93) : rand(0.88,0.96))
+  const ai = { risk_level: aiRisk, confidence: aiConf, reasons: buildAiReasons(aiRisk) }
+
+  return { tamper, ai }
 }
 
 async function makeThumbFromDataUrl(dataUrl){
@@ -845,19 +967,14 @@ async function makeThumbFromDataUrl(dataUrl){
 }
 
 function applyResult(result){
-  currentResult.value = result
+  const normalized = normalizeDetectionResult(result)
+  taskResults.tamper = normalized.tamper
+  taskResults.ai = normalized.ai
+  currentResult.value = normalized
 
-  const hm = result.heatmap_base64 || result.heatmap_url || ''
+  const hm = normalized.tamper.heatmap
   heatmapUrl.value = hm || ''
-  if (!hm) showToast(detectText.value.defaults.toastTitle, detectText.value.defaults.noHeatmapDesc)
-
-  reasons.value = (result.reasons || []).map(r => ({
-    title: r.title || r.reason || detectText.value.reasonFallback,
-    detail: r.detail || r.desc || r.message || '',
-    severity: normalizeSeverity(r.severity || r.level || ''),
-    tag: r.tag || '',
-    value: r.value || ''
-  }))
+  if (!hm && statusKey.value === 'done') showToast(detectText.value.defaults.toastTitle, detectText.value.defaults.noHeatmapDesc)
 }
 
 async function detect(){
@@ -895,22 +1012,24 @@ async function detect(){
     const t1 = performance.now()
     timeCostMs.value = Math.round(t1 - t0)
 
-    applyResult(result)
+    const normalized = normalizeDetectionResult(result)
+    applyResult(normalized)
 
     // save history
       const thumb = await makeThumbFromDataUrl(imageUrl.value)
+      const primaryTask = normalized.tamper?.risk_level ? normalized.tamper : normalized.ai
       addHistoryRecord({
         id: crypto.randomUUID(),
         ts: Date.now(),
         filename: currentFile.value.name,
-        confidence: result.confidence ?? 0,
-        risk_level: result.risk_level ?? detectText.value.defaults.dash,
-        conclusion: riskToConclusion(result.risk_level ?? detectText.value.defaults.dash),
-        tamper_area_ratio: result.tamper_area_ratio ?? null,
+        confidence: primaryTask?.confidence ?? 0,
+        risk_level: primaryTask?.risk_level ?? detectText.value.defaults.dash,
+        conclusion: riskToConclusion(primaryTask?.risk_level ?? detectText.value.defaults.dash),
+        tamper_area_ratio: normalized.tamper?.tamper_area_ratio ?? null,
         thumb,
         image: imageUrl.value,
         heatmap: heatmapUrl.value,
-        raw: result
+        raw: normalized
       })
 
     progress.value = 100
@@ -989,3 +1108,40 @@ for (const it of items) {
 }
 
 </script>
+
+<style scoped>
+.taskTabs{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.taskTab{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border:1px solid rgba(122,162,255,0.30);
+  border-radius:12px;
+  background: rgba(122,162,255,0.06);
+  font-size:12px;
+  color:#112;
+  cursor:pointer;
+  transition: all .15s ease;
+}
+.taskTab .dot{
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  display:inline-block;
+}
+.taskTab .dot.good{ background:#2cbe4e; }
+.taskTab .dot.warn{ background:#e0a800; }
+.taskTab .dot.bad{ background:#e55353; }
+.taskTab .dot.idle{ background:#c8d1e5; }
+.taskTab.active{
+  border-color: rgba(122,162,255,0.65);
+  background: rgba(122,162,255,0.14);
+  box-shadow: 0 0 0 1px rgba(122,162,255,0.12) inset;
+}
+</style>

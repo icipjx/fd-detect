@@ -83,7 +83,6 @@
           <div class="row pillRow">
             <span class="pill" :title="detectText.pills.scene"><span class="pill-text">{{ detectText.pills.scene }}</span></span>
             <span class="pill" :title="detectText.pills.model"><span class="pill-text">{{ detectText.pills.model }}</span></span>
-            <span class="pill" :title="detectText.pills.rules"><span class="pill-text">{{ detectText.pills.rules }}</span></span>
           </div>
 
           <div class="row actionRow" style="margin-top:14px">
@@ -219,31 +218,6 @@
             </div>
           </div>
 
-          <div style="margin-top:14px">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-              <b style="font-size:13px">{{ detectText.rulesTitle }}</b>
-              <span class="badge">{{ rules.length }} {{ detectText.ruleCountLabel }}</span>
-            </div>
-            <div class="list">
-              <div v-if="rules.length===0" class="item">
-                <div class="left">
-                  <div class="dot"></div>
-                  <div><b>{{ detectText.ruleEmptyTitle }}</b><span>{{ detectText.ruleEmptyDesc }}</span></div>
-                </div>
-              </div>
-              <div v-for="(r, idx) in rules" :key="'k'+idx" class="item">
-                <div class="left">
-                  <div class="dot" :class="dotClass(r.status)"></div>
-                  <div>
-                    <b>{{ r.name }} <code v-if="r.tag">{{ r.tag }}</code></b>
-                    <span>{{ r.detail || detectText.defaults.dash }}</span>
-                  </div>
-                </div>
-                <code v-if="r.value !== ''">{{ r.value }}</code>
-              </div>
-            </div>
-          </div>
-
           
           <div style="margin-top:14px" :key="lang">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -326,7 +300,6 @@ const progress = ref(0)
 const timeCostMs = ref(null)
 
 const reasons = ref([])
-const rules = ref([])
 const historyAll = ref([]) // 模拟“后端历史库”（接后端后用接口替代）
 const historyView = ref([]) // 页面展示的分页结果
 const historyPage = ref(1)
@@ -558,7 +531,6 @@ async function dataUrlToFile(dataUrl, filename) {
 function buildSampleResult({ risk_level, confidence, tamper_area_ratio, seed }) {
   const heatmap = makeHeatmapBase64Seeded(seed)
   const mReasons = detectText.value.mockReasons
-  const mRules = detectText.value.mockRules
 
   const rs = []
   if (risk_level !== 'LOW') {
@@ -571,19 +543,12 @@ function buildSampleResult({ risk_level, confidence, tamper_area_ratio, seed }) 
     rs.push({ title: mReasons.date.title, detail: mReasons.date.detail, severity: 'FAIL' })
   }
 
-  const ks = [
-    { name: mRules.amount.name, detail: risk_level === 'HIGH' ? mRules.amount.detailHigh : mRules.amount.detailPass, status: risk_level === 'HIGH' ? 'FAIL' : 'PASS', tag: 'amount_consistency', value: risk_level === 'HIGH' ? 'FAIL' : 'PASS' },
-    { name: mRules.sum.name, detail: risk_level === 'MID' ? mRules.sum.detailMid : mRules.sum.detailPass, status: risk_level === 'MID' ? 'WARN' : 'PASS', tag: 'sum_check', value: risk_level === 'MID' ? 'WARN' : 'PASS' },
-    { name: mRules.layout.name, detail: mRules.layout.detail, status: 'PASS', tag: 'layout_check', value: 'PASS' }
-  ]
-
   return {
     risk_level,
     confidence,
     tamper_area_ratio,
     heatmap_base64: heatmap,
-    reasons: rs,
-    rules: ks
+    reasons: rs
   }
 }
 
@@ -628,7 +593,6 @@ async function applySample(s, { skipHistory = false } = {}) {
   currentFile.value = null
   currentResult.value = null
   reasons.value = []
-  rules.value = []
   heatmapUrl.value = ''
   showOverlay.value = false
   progress.value = 100
@@ -646,7 +610,7 @@ async function applySample(s, { skipHistory = false } = {}) {
     // ignore
   }
 
-  // 自动渲染固定结果（热力图/风险/置信度/占比/解释/规则）
+  // 自动渲染固定结果（热力图/风险/置信度/占比/解释）
   const result = buildSampleResult({
     risk_level: s.risk_level,
     confidence: s.confidence,
@@ -773,7 +737,6 @@ function onFileSelected(file){
   currentFile.value = file
   currentResult.value = null
   reasons.value = []
-  rules.value = []
   heatmapUrl.value = ''
   showOverlay.value = false
 
@@ -788,7 +751,6 @@ function clearAll(){
   currentFile.value = null
   currentResult.value = null
   reasons.value = []
-  rules.value = []
   imgMeta.value = detectText.value.defaults.imgMeta
   statusKey.value = 'waiting'
   progress.value = 0
@@ -824,13 +786,6 @@ function normalizeSeverity(s){
   if (['FAIL','HIGH','BAD'].includes(s)) return 'FAIL'
   return 'WARN'
 }
-function normalizeStatus(s){
-  s = String(s||'').toUpperCase()
-  if (['PASS','OK','TRUE','SUCCESS'].includes(s)) return 'PASS'
-  if (['WARN','MAYBE','MID'].includes(s)) return 'WARN'
-  if (['FAIL','FALSE','ERROR','HIGH'].includes(s)) return 'FAIL'
-  return 'WARN'
-}
 
 function rand(a,b){ return a + Math.random()*(b-a) }
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)) }
@@ -862,7 +817,6 @@ function buildMockResult(){
   const area = risk==='LOW' ? rand(0.005,0.03) : (risk==='MID' ? rand(0.02,0.09) : rand(0.08,0.22))
   const heatmap = makeFakeHeatmapBase64()
   const mReasons = detectText.value.mockReasons
-  const mRules = detectText.value.mockRules
 
   const rs = []
   if(risk !== 'LOW') rs.push({ title: mReasons.tamper.title, detail: mReasons.tamper.detail, severity:'FAIL' })
@@ -870,13 +824,7 @@ function buildMockResult(){
   rs.push({ title: mReasons.recompress.title, detail: mReasons.recompress.detail, severity: risk==='HIGH'?'WARN':'PASS' })
   if(risk === 'HIGH') rs.push({ title: mReasons.date.title, detail: mReasons.date.detail, severity:'FAIL' })
 
-  const ks = [
-    { name: mRules.amount.name, detail: risk==='HIGH' ? mRules.amount.detailHigh : mRules.amount.detailPass, status: risk==='HIGH'?'FAIL':'PASS', tag:'amount_consistency', value: risk==='HIGH'?'FAIL':'PASS' },
-    { name: mRules.sum.name, detail: risk==='MID' ? mRules.sum.detailMid : mRules.sum.detailPass, status: risk==='MID'?'WARN':'PASS', tag:'sum_check', value: risk==='MID'?'WARN':'PASS' },
-    { name: mRules.layout.name, detail: mRules.layout.detail, status:'PASS', tag:'layout_check', value:'PASS' }
-  ]
-
-  return { risk_level:risk, confidence:conf, tamper_area_ratio:area, heatmap_base64:heatmap, reasons:rs, rules:ks }
+  return { risk_level:risk, confidence:conf, tamper_area_ratio:area, heatmap_base64:heatmap, reasons:rs }
 }
 
 async function makeThumbFromDataUrl(dataUrl){
@@ -909,14 +857,6 @@ function applyResult(result){
     severity: normalizeSeverity(r.severity || r.level || ''),
     tag: r.tag || '',
     value: r.value || ''
-  }))
-
-  rules.value = (result.rules || []).map(r => ({
-    name: r.name || r.title || detectText.value.ruleFallback,
-    detail: r.detail || r.desc || '',
-    status: normalizeStatus(r.status || r.result || ''),
-    tag: r.tag || r.field || '',
-    value: (r.value ?? '')
   }))
 }
 
